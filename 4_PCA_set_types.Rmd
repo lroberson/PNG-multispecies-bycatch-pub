@@ -1,0 +1,99 @@
+---
+title: "4_PCA_set_types"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(cluster)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# make set type matrix
+```{r}
+# Load fitted models
+model_files <- list.files("models/", pattern = "best_model\\.rds$", full.names = TRUE)
+response_names <- gsub("_best_model\\.rds$", "", basename(model_files))
+models <- setNames(lapply(model_files, readRDS), response_names)
+
+# Extract set type random effects
+extract_settype <- function(model){
+  coefs <- coef(model)
+  vals <- coefs[grep("^s\\(set_type\\)", names(coefs))]
+  names(vals) <- sub("^s\\(set_type\\)\\.", "", names(vals))
+  vals
+}
+
+settype_effects <- lapply(models, extract_settype)
+
+# Remove responses with no set type effect
+settype_effects <- settype_effects[sapply(settype_effects, function(x) any(x != 0))]
+
+# Set type × response matrix
+settype_matrix <- do.call(cbind, settype_effects)
+
+dim(settype_matrix)
+sort(apply(settype_matrix, 2, sd))
+```
+
+## PCA
+```{r}
+pca_settypes <- prcomp(settype_matrix, scale. = TRUE)
+
+scores_settypes <- data.frame(pca_settypes$x)
+scores_settypes$set_type <- rownames(scores_settypes)
+
+loadings <- data.frame(pca_settypes$rotation)
+loadings$variable <- rownames(loadings)
+
+# Variance explained
+var_exp <- 100 * (pca_settypes$sdev^2) / sum(pca_settypes$sdev^2)
+var_exp[1:2]
+```
+
+## scree plot
+```{r}
+# Scree plot
+scree_df <- data.frame(PC = seq_along(var_exp), Variance = var_exp)
+
+ggplot(scree_df, aes(PC, Variance)) +
+  geom_col(fill = "grey70") +
+  geom_point(size = 2) +
+  geom_line(aes(group = 1)) +
+  labs(x = "Principal component",
+       y = "Variance explained %") +
+  theme_bw()
+```
+
+## hierarchical clustering
+```{r}
+
+d <- dist(pca_settypes$x)
+hc <- hclust(d, method = "ward.D2")
+
+# look at dendrogram
+plot(hc, xlab = "", sub = "") # looks like 3
+
+# Compare the 2 v. 3 cluster solutions
+plot(hc)
+rect.hclust(hc, k = 2, border = "red")
+
+plot(hc)
+rect.hclust(hc, k = 3, border = "blue")
+
+# Silhouette widths for alternative numbers of clusters
+sapply(2:5, function(k){
+  cl <- cutree(hc, k)
+  mean(silhouette(cl, d)[,3])
+})
+# Silhouette widths are low for all solutions -> weak separation among clusters
+# choose the 3 cluster one based on major branch structure in the dendrogram
+clusters <- cutree(hc, k = 3)
+
+scores_settypes$cluster <- factor(
+  clusters[match(scores_settypes$set_type, names(clusters))])
+
+scores_settypes[, c("set_type", "cluster")]
+
+```
+

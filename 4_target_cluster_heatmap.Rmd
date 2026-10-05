@@ -1,0 +1,58 @@
+---
+title: "Target cluster heatmap"
+author: "Leslie Roberson"
+date: "2026-10-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# overview
+- extract target species cluster effects (fixed effect) from each bycatch species model and combined into a cluster × species matrix
+- exploerd a PCA initially but because there were only four cluster categories, the heatmap was more informative
+
+```{r}
+# Load fitted models
+model_files <- list.files("models/", pattern = "best_model\\.rds$", full.names = TRUE)
+response_names <- gsub("_best_model\\.rds$", "", basename(model_files))
+models <- setNames(lapply(model_files, readRDS), response_names)
+
+# Extract target cluster coefficients
+extract_cluster <- function(model){
+  cf <- coef(model)
+  vals <- cf[grep("^target_cluster", names(cf))]
+  names(vals) <- gsub("^target_cluster", "", names(vals))
+  c("Mixed" = 0,  # reference level
+    vals
+  )
+}
+cluster_effects <- lapply(models, extract_cluster)
+
+# Cluster × response matrix
+cluster_matrix <- sapply(cluster_effects, identity)
+
+round(cluster_matrix, 2)
+
+# Convert matrix to long format for plotting
+heat_df <- as.data.frame(as.table(t(cluster_matrix)))
+names(heat_df) <- c("Response", "Cluster", "Coefficient")
+```
+
+## heatmap of fitted coefficients
+```{r}
+# Heatmap of fitted coefficients
+ggplot(heat_df, aes(x = Cluster, y = Response, fill = Coefficient)) +
+  geom_tile(colour = "white", linewidth = 0.4) +
+  geom_text(aes(label = round(Coefficient, 2)), size = 3) +
+  scale_fill_gradient2(low = "#4575b4", mid = "white", high = "#d73027",  midpoint = 0, name = "Coefficient") +
+  labs(x = NULL, y = NULL) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+

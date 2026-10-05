@@ -1,7 +1,5 @@
 ---
-title: "3_PCAs"
-author: "Leslie Roberson"
-date: "2026-10-05"
+title: "PCA vessels"
 output: html_document
 ---
 
@@ -43,7 +41,10 @@ extract_vessel_effects <- function(model) {
 }
 vessel_effects <- lapply(models, extract_vessel_effects)
 
-# Vessel × response matrix
+# Remove models with no vessel effect (dolphins)
+vessel_effects <- vessel_effects[ sapply(vessel_effects, function(x) any(x != 0))]
+
+# Vessel response matrix
 vessel_matrix <- do.call(cbind, vessel_effects)
 
 dim(vessel_matrix)
