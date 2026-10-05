@@ -1,0 +1,111 @@
+---
+title: "3_PCAs"
+author: "Leslie Roberson"
+date: "2026-10-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(cluster)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# set up matrix
+
+```{r}
+# Load best models with vessel as random effect
+model_files <- list.files(
+  path = "models/",
+  pattern = "best_model\\.rds$",
+  full.names = TRUE)
+
+response_names <- gsub("_best_model\\.rds$", "", basename(model_files))
+
+models <- setNames(
+  lapply(model_files, readRDS),
+  response_names)
+
+# Extract vessel random effects
+extract_vessel_effects <- function(model) {
+  coefs <- coef(model)
+  idx <- grep("^s\\(vessel\\)", names(coefs))
+  if (length(idx) > 0) {
+    effects <- coefs[idx]
+    names(effects) <- sub(
+      "^s\\(vessel\\)\\.",
+      "",
+      names(effects)
+    )
+    return(effects)
+  }
+  NULL
+}
+vessel_effects <- lapply(models, extract_vessel_effects)
+
+# Vessel × response matrix
+vessel_matrix <- do.call(cbind, vessel_effects)
+
+dim(vessel_matrix)
+```
+
+## PCA on vessel effect matrix
+
+```{r}
+# PCA on vessel-effect matrix
+pca <- prcomp(vessel_matrix, scale. = TRUE)
+
+apply(vessel_matrix, 2, sd) %>% sort()
+# plot vessels
+plot(pca$x[,1], pca$x[,2],  xlab = "PC1",  ylab = "PC2",  pch = 16)
+# add species loadings
+biplot(pca)
+loadings <- data.frame(pca$rotation)
+loadings$species <- rownames(loadings)
+plot(pca$x[,1], pca$x[,2], pch = 16)
+arrows(0, 0, loadings$PC1, loadings$PC2, col = "red", length = 0.1)
+text(loadings$PC1, loadings$PC2, labels = loadings$species, col = "red", pos = 3)
+```
+
+## k means clustering
+```{r}
+# pick number of clusters using an elbow plot
+wss <- sapply(1:10,
+  function(k) {
+    kmeans(
+      pca$x[, 1:2],
+      centers = k,
+      nstart = 20
+    )$tot.withinss})
+
+plot(1:10, wss, type = "b", xlab = "Number of clusters k", ylab = "Within cluster SS")
+
+# Select k based on the elbow plot
+km <- kmeans(pca$x[, 1:2], centers = 3, nstart = 20)
+
+# Visualise clusters
+plot(pca$x[, 1:2], col = km$cluster, pch = 19, xlab = "PC1", ylab = "PC2")
+points( km$centers, pch = 8,cex = 2)
+
+# Cluster diagnostics
+sil <- silhouette( km$cluster, dist(pca$x[, 1:2]))
+plot(sil)
+
+mean(sil[, 3])
+```
+
+## scree plot
+```{r}
+
+variance_explained <- data.frame(
+  PC = paste0("PC", seq_along(pca$sdev)),
+  Variance = (pca$sdev^2) / sum(pca$sdev^2))
+
+ggplot(  variance_explained, aes(x = PC, y = Variance)) +
+  geom_col(fill = "grey70") +
+  geom_point(size = 2) +
+  geom_line(aes(group = 1)) +
+  labs(x = "Principal component", y = "Proportion of variance explained") +
+  theme_bw()
+```
+

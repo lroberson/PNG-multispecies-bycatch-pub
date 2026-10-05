@@ -1,0 +1,142 @@
+---
+title: "stepwise model selection"
+
+---
+
+# Model selection procedure
+
+```{r setup, include=FALSE}
+
+library(tidyverse)
+library(mgcv)
+library(MuMIn)
+library(broom)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Example workflow shown for one bycatch species
+The same process was repeated independently for all 7
+```{r global model}
+# data in wide format where 1 row = unique set_ID
+mod_global <- gam( bycatch_species ~ # either weight or count
+    year + # 2019 - 2023
+    s(target_catch_MT) + # combined weight of SKJ, YFT, BET
+    s(latitude, longitude) + # coordinates in decimal degrees recorded at start of net setting
+    s(month, bs = "cc") + # fishing occurs all months of the year, so use a circular smooth
+    s(set_time) + # time set begain (rounded to 1 decimal place, or 10 minute intervals)
+    flag + # PNG or Philippines
+    eez + # grouped into PNG or other (outside PNG EEZ)
+    target_cluster + # k means cluster derived from cluster analysis (4 categories)
+    s(set_type, bs = "re") + # 8 categories of associated or unassociated set types
+    s(vessel, bs = "re") # unique identifier for the vessel
+  data = model_data,
+  family = tw(),
+  method = "REML"
+)
+AIC(mod_global)
+
+```
+
+## use dredge to identify candidate supported models
+
+```{r dredge}
+options(na.action = "na.fail")
+
+dredge_results <- dredge(mod_global, evaluate = TRUE)
+
+head(dredge_results)
+```
+
+## iteratively simplify and compare alternate formations
+
+Where multiple candidate models showed similar support (ΔAIC < 2), we iteratively simplified the model and looked at alternative formats of individual predictors. Model selection considered both AIC and diagnostic performance. 
+Where there was a clear winner from the dredge, we also evaluated alternative formats of individual predictors where relevant (e.g. set type as a fixed v random effect)
+
+```{r simplify}
+
+mod_1 <- update(mod_global, .~. - flag - eez)
+AIC(mod_global, mod_1)
+
+```
+
+## check altnerate distriubtions
+
+bycatch observations were veryzero-inflated and overdispersed - compare Tweedie and negative binomial distributions 
+Tweedie models were consistently better, and worked for all response variables (silky sharks as weights, all other models as counts)
+
+```{r compare distributions}
+mod_tw <- mod_1
+mod_nb <- update(mod_tw, family = nb())
+AIC(mod_tw, mod_nb)
+```
+
+## Fixed effect vessel factor
+Test vessel as fixed instead of random effect
+Try penalizing vessel term (more relevant for the rarer species)
+```{r vessel fixed effect}
+
+# first just normal fixed effect
+mod_2 <- update(mod_1, .~. - s(vessel, bs = "re") + vessel)
+
+# then set penalty on vessel factor
+NoCoefs <- length(unique(model_data$vessel))-1 
+pp <- list(vessel = list(rank = NoCoefs, diag=diag(NoCoefs)))
+# # set sum to zero contrasts
+contrasts(model_data$vessel) <- contr.sum(NoCoefs + 1)
+
+# refit instead of using update to make sure the contrast coding works
+mod_3 <- gam(bycatch_species ~
+               s(x) +
+               y +
+               vessel,
+  data = model_data,
+  family = tw(),
+  method = "REML",
+  paraPen = pp)
+
+```
+
+## Model diagnostics
+
+For each model:
+1. look at model summaries and AIC values.
+2. check basis dimensions and residual patterns using `gam.check()`.
+3. check concurvity among model terms using `concurvity()`.
+4. look at DHARMa simulated residuals and test for uniformity, dispersion, outliers
+5. inspect fitted smooth functions using `gratia::draw()`.
+
+```{r}
+mods <- list(
+  mobulids = mobulids.best,
+  silky = silky.best,
+  turtles = turtles.best,
+  whaleshark = whaleshark.best,
+  fkw = fkw.best,
+  dolphins = dolphins.best,
+  baleens = baleens.best
+)
+
+sim_res <- simulateResiduals(
+  fittedModel = mod,
+  n = 1000
+)
+
+gam.check(mod) # adjust ks where needed
+
+concurvity(mod, full = TRUE)
+
+testUniformity(sim_res)
+testDispersion(sim_res)
+testOutliers(sim_res)
+
+gratia::draw(mod)
+
+# save outputs
+mapply(
+  run_gam_diagnostics,
+  mod = mods,
+  name = names(mods),
+  MoreArgs = list(outdir = outdir)
+)
+```

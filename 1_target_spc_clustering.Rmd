@@ -1,0 +1,131 @@
+---
+title:  "Target catch species composition cluster analysis"
+output: html_document
+---
+
+## Overview
+
+This vignette demonstrates how purse seine sets were classified according to the composition of the three dominant target tuna species:
+
+- Skipjack tuna (SKJ)
+- Yellowfin tuna (YFT)
+- Bigeye tuna (BET)
+
+Initial data exploration showed these three species made up the overwhelming majority of retained target catch, which is supported by the literature (these are the listed primary target species)
+
+```{r setup}
+library(dplyr)
+library(ggplot2)
+library(ggtern)
+library(tidyr)
+```
+
+## Prepare target catch composition data
+
+Use the retained catch (MT) of the three main tuna species
+
+Target catch is heavily dominated by SKJ, then YFT, and then BET is much lower
+
+sp_cat_code sp_code retain_tot disc_tot
+1 TUN         SKJ       253980.   1143.  
+2 TUN         YFT       140624.    526.  
+3 TUN         BET         4996.     11.3 
+4 TUN         FRI          131.     32.7 
+5 NULL        RRU           89.1    35.9
+
+```{r}
+# data in wide format with one row per set (set_id)
+target_dat <- model_data %>%
+  select(set_id, SKJ_MT, YFT_MT, BET_MT)
+
+# cluster on species proportions. Also explored total volumes, but because skipjack is so dominant it takes over - want to capture the known (documented) targeting of bigeye, which is caught in much lower volumes but is higher value 
+
+target_dat <- target_dat %>%  mutate(total_tuna = SKJ_MT, YFT_MT, BET_MT)
+
+# exclude Sets with zero catch of all three species - can't calculatue proportions 
+nonzero_sets <- target_dat %>% filter(total_tuna > 0)
+
+# Calculate species proportions:
+target_props <- nonzero_sets %>%
+  mutate(pSKJ = SKJ_MT / total_tuna,
+         pYFT = YFT_MT / total_tuna, 
+         pBET = BET_MT / total_tuna
+  )
+```
+
+## K-means clustering 
+
+```{r}
+cluster_dat <- target_props %>% select(pSKJ, pYFT, pBET)
+
+## Use elbow method to decide optimal number of clusters
+set.seed(123)
+
+wss <- sapply(
+  1:10,
+  function(k) {
+    kmeans(cluster_dat, centers = k, nstart = 50)$tot.withinss
+  })
+
+elbow_df <- data.frame(k = 1:10, wss = wss)
+
+ggplot(elbow_df, aes(k, wss)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = 1:10) +
+  labs(x = "Number of clusters (k)", y = "Total within-cluster sum of squares") +
+  theme_bw()
+# not super obvious but most distinct elbow at k=3
+
+## Fit final clustering solution
+set.seed(123)
+
+km <- kmeans(cluster_dat, centers = 3, nstart = 50)
+
+target_props$cluster <- factor(km$cluster)
+
+table(target_props$cluster)
+```
+
+# Visualise cluster composition
+
+```{r}
+ggtern(
+  target_props,
+  aes(x = pSKJ, y = pYFT, z = pBET, colour = cluster )) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  theme_bw() +
+  labs(x = "SKJ proportion", y = "YFT proportion", z = "BET proportion",
+    colour = "Cluster")
+```
+
+# Assign descriptive labels
+```{r}
+## look at the dominant species composition within each group
+target_props %>%
+  group_by(cluster) %>%
+  summarise(
+    mean_SKJ = mean(pSKJ),
+    mean_YFT = mean(pYFT),
+    mean_BET = mean(pBET)
+  )
+
+target_props <- target_props %>%
+  mutate(target_cluster = recode(
+      cluster,
+      "1" = "YFT dominant",
+      "2" = "SKJ dominant",
+      "3" = "Mixed"))
+
+# Add zero-target category - sets with no catch of SKJ, YFT, or BET
+cluster_assignments <- target_props %>% select(set_id, target_cluster)
+
+model_data <- model_data %>%
+  left_join(cluster_assignments, by = "set_id") %>%
+  mutate(target_cluster = case_when(
+      SKJ_MT + YFT_MT + BET_MT == 0 ~ "Zero main targets",
+      TRUE ~ target_cluster))
+
+table(model_data$target_cluster)
+```
+
