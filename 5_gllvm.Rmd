@@ -1,0 +1,92 @@
+---
+title: "gllvm"
+output: html_document
+---
+
+# Overview
+
+GLLVM first including tuna, to test whether bycatch co occurs with high tuna catches
+and then repeated the process without tuna, just looking at co occurrence of bycatch taxa
+
+```{r setup, include=FALSE}
+library(gllvm) 
+library(tidyverse)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# response matrix
+
+```{r}
+# Load data
+dat <- readRDS("data/analysis_data.rds")
+
+# Response matrix
+Y <- dat[, c(
+  "silky",
+  "mobulids",
+  "whale_sharks",
+  "false_killer_whales",
+  "sea_turtles",
+  "baleen_whales",
+  "dolphins",
+  "tunas"
+)]
+
+# Log-transform tuna and standardise responses
+Y$tuna_catch <- log(Y$tuna_catch + 1)
+
+Y_scaled <- scale(Y)
+```
+
+# predictor matrix
+Don't include the target cluster as it's very close to one of the response species (tuna catch)
+```{r}
+# Year
+X <- data.frame(year = factor(dat$year))
+
+# months (season)
+X$month_sin <- sin(2*pi*dat$month/12)
+X$month_cos <- cos(2*pi*dat$month/12)
+
+# set time
+X$time_sin <- sin(2*pi*dat$set_time_hour/24)
+X$time_cos <- cos(2*pi*dat$set_time_hour/24)
+
+# Set type
+X$set_type <- factor(dat$set_type)
+
+# targeting cluster
+X$target_cluster  <- factor(dat$target_cluster) 
+```
+
+# spatial basis function
+```{r}
+# Approximate a spatial smooth using basis functions
+smooth_obj <- smoothCon(s(lat, lon, k = 10), data = dat, absorb.cons = TRUE)
+
+spatial_basis <- scale(smooth_obj[[1]]$X)
+
+X <- cbind(X, spatial_basis)
+
+start_col <- which(names(X) == "target_cluster") + 1
+end_col <- ncol(X)
+
+colnames(X)[start_col:end_col] <- paste0("spatial_", 1:(end_col - start_col + 1))
+
+```
+
+# fit gllvm
+```{r}
+# Multivariate model of all species groups and tuna, no vessel effect
+fit <- gllvm(Y_scaled, X = X, family = "gaussian", num.lv = 0) # first with no latent variabels and no vessel effect
+summary(fit)
+
+# test if residual species asosciations remain after accounting for the predictors
+fit_lv <- gllvm( Y_scaled, X = X, family = "gaussian", num.lv = 1) # got singular fit warnign
+summary(fit_lv)
+
+# try no latent variables, with vessel effect
+fit_vessel <- gllvm(Y_scaled, X = X, family = "gaussian", num.lv = 0, studyDesign = data.frame(vessel = factor(dat$vessel)), row.eff = "vessel")
+summary(fit_vessel) # AIC is the same, vessel effect not contirbuting 
+```
+
